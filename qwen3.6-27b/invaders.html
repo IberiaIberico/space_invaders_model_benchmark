@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Space Invaders</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#000;overflow:hidden;display:flex;justify-content:center;align-items:center}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;image-rendering:exact;image-rendering:-moz-crisp-edges;-ms-interpolation-mode:nearest-neighbor}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+"use strict";
+const GW=224,GH=256;
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+canvas.width=GW;canvas.height=GH;
+
+function resize(){
+const s=Math.min(window.innerWidth/GW,window.innerHeight/GH);
+canvas.style.width=Math.floor(GW*s)+'px';
+canvas.style.height=Math.floor(GH*s)+'px';
+}
+window.addEventListener('resize',resize);resize();
+
+// Audio
+let audioCtx=null;
+function initAudio(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)()}
+function playTone(freq,dur,type,vol){
+if(!audioCtx)return;
+const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+o.type=type||'square';o.frequency.value=freq;
+g.gain.value=vol||0.1;
+g.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+dur);
+o.connect(g);g.connect(audioCtx.destination);
+o.start();o.stop(audioCtx.currentTime+dur);
+}
+function playNoise(dur,vol){
+if(!audioCtx)return;
+const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*dur,audioCtx.sampleRate);
+const d=buf.getChannelData(0);
+for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1);
+const s=audioCtx.createBufferSource();s.buffer=buf;
+const g=audioCtx.createGain();g.gain.value=vol||0.15;
+g.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+dur);
+s.connect(g);g.connect(audioCtx.destination);s.start();
+}
+function sfxPlayerShot(){playTone(880,0.08,'square',0.12)}
+function sfxAlienShot(){playTone(120,0.15,'sawtooth',0.08)}
+function sfxAlienKill(){playNoise(0.1,0.15)}
+function sfxPlayerKill(){playNoise(0.4,0.25)}
+function sfxUfoKill(){playNoise(0.2,0.2)}
+let ufoOsc=null;
+function sfxUfoStart(){
+if(!audioCtx)return;
+if(ufoOsc)try{ufoOsc.stop()}catch(e){}
+ufoOsc=audioCtx.createOscillator();
+const g=audioCtx.createGain();g.gain.value=0.06;
+ufoOsc.type='sine';ufoOsc.frequency.value=400;
+ufoOsc.connect(g);g.connect(audioCtx.destination);ufoOsc.start();
+}
+function sfxUfoStop(){if(ufoOsc){try{ufoOsc.stop()}catch(e){}ufoOsc=null}}
+let stepIdx=0;
+const stepFreqs=[180,170,160,150];
+function sfxStep(){playTone(stepFreqs[stepIdx%4],0.04,'square',0.06);stepIdx++}
+
+// Pixel art sprites as arrays of strings
+const SPRITES={
+invader1:[
+'  0000  ',
+' 000000 ',
+'00000000',
+'00000000',
+' 000000 ',
+' 0 00 0 ',
+' 0 00 0 ',
+'00 00 00'
+],
+invader1b:[
+'  0000  ',
+' 000000 ',
+'00000000',
+'00000000',
+' 000000 ',
+' 0   0  ',
+'  0 0   ',
+'0    0  '
+],
+invader2:[
+' 00    00',
+' 000  000',
+'000000000',
+'000000000',
+'000000000',
+'  0000  ',
+' 00  00 ',
+'00    00'
+],
+invader2b:[
+' 00    00',
+' 000  000',
+'000000000',
+'000000000',
+'000000000',
+'  0000  ',
+' 00  00 ',
+'00    00'
+],
+invader3:[
+' 00  00 ',
+' 00  00 ',
+'00000000',
+'00000000',
+'00000000',
+'  0000  ',
+' 00  00 ',
+'00    00'
+],
+invader3b:[
+' 00  00 ',
+' 00  00 ',
+'00000000',
+'00000000',
+'00000000',
+'  0000  ',
+' 00  00 ',
+'00    00'
+],
+player:[
+'    0    ',
+'   000   ',
+'  00000  ',
+' 00000000',
+'000000000',
+'000000000',
+'000000000',
+'000000000'
+],
+ufo:[
+'  0000  ',
+' 000000 ',
+'00000000',
+'00000000',
+'00000000',
+' 000000 ',
+' 000000 ',
+' 00 00  '
+],
+shield:[
+' 000000 ',
+' 000000 ',
+' 000000 ',
+' 000000 ',
+' 000000 ',
+' 000000 ',
+'00000000',
+'00000000'
+]
+};
+
+function spriteToPixels(sprite){
+const pixels=[];
+for(let r=0;r<sprite.length;r++){
+for(let c=0;c<sprite[r].length;c++){
+if(sprite[r][c]==='0')pixels.push({x:c,y:r});
+}
+}
+return pixels;
+}
+
+const spritePixels={};
+for(const k in SPRITES)spritePixels[k]=spriteToPixels(SPRITES[k]);
+
+// Game state
+let state='title'; // title, playing, gameover
+let score=0,lives=3,wave=1;
+let playerX=112,playerY=230;
+let playerShot=null;
+let alienShots=[];
+let aliens=[];
+let alienDir=1,alienSpeed=1,alienMoveTimer=0,alienMoveInterval=60;
+let shields=[];
+let ufo=null,ufoTimer=0;
+let particles=[];
+let frameCount=0;
+let alienShotTimer=0;
+let stepSoundTimer=0;
+
+const keys={};
+document.addEventListener('keydown',e=>{
+keys[e.code]=true;
+if(e.code==='Space'||e.code==='ArrowLeft'||e.code==='ArrowRight')e.preventDefault();
+if(state==='title'){initAudio();startGame()}
+if(state==='gameover'&&e.code==='Space'){state='title'}
+});
+document.addEventListener('keyup',e=>{keys[e.code]=false});
+
+function createAliens(){
+aliens=[];
+const types=[0,0,1,1,1,2,2,2];
+const startY=40;
+for(let row=0;row<8;row++){
+for(let col=0;col<11;col++){
+aliens.push({
+x:28+col*16,y:startY+row*14,
+type:types[row],alive:true,
+frame:0
+});
+}
+}
+}
+
+function createShields(){
+shields=[];
+const positions=[36,84,132,180];
+for(const px of positions){
+const pixels=[];
+for(let r=0;r<8;r++){
+for(let c=0;c<7;c++){
+pixels.push({x:px+c,y:py+r,alive:true});
+}
+}
+}
+}
+
+function createShields(){
+shields=[];
+const positions=[36,84,132,180];
+for(const px of positions){
+const shieldPixels=[];
+for(let r=0;r<8;r++){
+for(let c=0;c<7;c++){
+shieldPixels.push({x:px+c,y:48+r,alive:true});
+}
+}
+shields.push(shieldPixels);
+}
+}
+
+function startGame(){
+score=0;lives=3;wave=1;
+playerX=112;playerShot=null;alienShots=[];
+particles=[];ufo=null;ufoTimer=0;
+createAliens();createShields();
+alienDir=1;alienSpeed=1;alienMoveInterval=60;
+alienMoveTimer=0;stepIdx=0;
+state='playing';
+}
+
+function resetWave(){
+playerShot=null;alienShots=[];
+createAliens();
+alienDir=1;alienSpeed=1;alienMoveInterval=Math.max(5,60-wave*5);
+alienMoveTimer=0;
+}
+
+function drawPixel(x,y,color){
+ctx.fillStyle=color;
+ctx.fillRect(x,y,1,1);
+}
+
+function drawSprite(spriteKey,x,y,color,scale){
+const px=spritePixels[spriteKey];
+if(!px)return;
+ctx.fillStyle=color;
+for(const p of px){
+ctx.fillRect(x+p.x*scale,y+p.y*scale,scale,scale);
+}
+}
+
+function drawSprite2(spriteKey,x,y,color,scale){
+const px=spritePixels[spriteKey];
+if(!px)return;
+ctx.fillStyle=color;
+for(const p of px){
+ctx.fillRect(x+p.x*scale,y+p.y*scale,scale,scale);
+}
+}
+
+function update(){
+frameCount++;
+if(state!=='playing')return;
+
+// Player movement
+const pSpeed=2;
+if(keys['ArrowLeft']||keys['KeyA'])playerX=Math.max(8,playerX-pSpeed);
+if(keys['ArrowRight']||keys['KeyD'])playerX=Math.min(GW-8,playerX+pSpeed);
+
+// Player shoot
+if(keys['Space']&&!playerShot){
+playerShot={x:playerX,y:playerY-8};
+sfxPlayerShot();
+}
+
+// Player shot update
+if(playerShot){
+playerShot.y-=4;
+if(playerShot.y<0)playerShot=null;
+}
+
+// Alien movement
+alienMoveTimer++;
+if(alenMoveTimer>=alienMoveInterval){
+alienMoveTimer=0;
+let hitEdge=false;
+for(const a of aliens){
+if(!a.alive)continue;
+if(a.x+alienDir*4<4||a.x+alienDir*4>GW-4)hitEdge=true;
+}
+if(hitEdge){
+alienDir*=-1;
+for(const a of aliens){
+if(a.alive)a.y+=4;
+}
+}
+for(const a of aliens){
+if(a.alive)a.x+=alienDir*4;
+}
+sfxStep();
+// Check if aliens reached bottom
+for(const a of aliens){
+if(a.alive&&a.y>=playerY-8){
+state='gameover';
+return;
+}
+}
+}
+
+// Alien shooting
+alienShotTimer++;
+const shootInterval=Math.max(20,60-wave*3);
+if(alienShotTimer>=shootInterval){
+alienShotTimer=0;
+const aliveAliens=aliens.filter(a=>a.alive);
+if(aliveAliens.length>0){
+// Find bottom-most alien in each column
+const cols={};
+for(const a of aliveAliens){
+const col=Math.floor(a.x/16);
+if(!cols[col]||a.y>cols[col].y)cols[col]=a;
+}
+const shooters=Object.values(cols);
+const shooter=shooters[Math.floor(Math.random()*shooters.length)];
+alienShots.push({x:shooter.x,y:shooter.y+8});
+sfxAlienShot();
+}
+}
+
+// Alien shots update
+for(let i=alienShots.length-1;i>=0;i--){
+alienShots[i].y+=2;
+if(alienShots[i].y>GH){alienShots.splice(i,1);continue}
+// Hit player
+if(Math.abs(alienShots[i].x-playerX)<6&&Math.abs(alienShots[i].y-playerY)<6){
+alienShots.splice(i,1);
+lives--;
+sfxPlayerKill();
+spawnParticles(playerX,playerY,'#fff',15);
+if(lives<=0){state='gameover';return}
+playerShot=null;
+}
+}
+
+// Player shot vs aliens
+if(playerShot){
+for(const a of aliens){
+if(!a.alive)continue;
+if(Math.abs(playerShot.x-a.x)<6&&Math.abs(playerShot.y-a.y)<6){
+a.alive=false;
+playerShot=null;
+const pts=[30,20,10];
+score+=pts[a.type];
+sfxAlienKill();
+spawnParticles(a.x,a.y,'#fff',8);
+// Speed up
+const aliveCount=aliens.filter(al=>al.alive).length;
+alienMoveInterval=Math.max(3,Math.floor(60*(aliveCount/88)));
+// Check wave clear
+if(aliveCount<=1){
+wave++;
+setTimeout(()=>resetWave(),1000);
+}
+break;
+}
+}
+}
+
+// Player shot vs shields
+if(playerShot){
+for(const shield of shields){
+for(const sp of shield){
+if(!sp.alive)continue;
+if(Math.abs(playerShot.x-sp.x)<2&&Math.abs(playerShot.y-sp.y)<2){
+sp.alive=false;
+playerShot=null;
+break;
+}
+}
+}
+}
+
+// Alien shots vs shields
+for(let i=alienShots.length-1;i>=0;i--){
+for(const shield of shields){
+for(const sp of shield){
+if(!sp.alive)continue;
+if(Math.abs(alienShots[i].x-sp.x)<2&&Math.abs(alienShots[i].y-sp.y)<2){
+sp.alive=false;
+alienShots.splice(i,1);
+break;
+}
+}
+}
+}
+
+// UFO
+ufoTimer++;
+if(!ufo&&ufoTimer>600+Math.random()*400){
+ufo={x:-16,y:20,dir:1};
+ufoTimer=0;
+sfxUfoStart();
+}
+if(ufo){
+ufo.x+=ufo.dir*1;
+if(ufo.x>GW+16){ufo=null;sfxUfoStop()}
+// Player shot vs UFO
+if(playerShot&&Math.abs(playerShot.x-ufo.x)<8&&Math.abs(playerShot.y-ufo.y)<6){
+score+=Math.floor(Math.random()*3+1)*50;
+sfxUfoKill();sfxUfoStop();
+spawnParticles(ufo.x,ufo.y,'#f00',12);
+ufo=null;playerShot=null;
+}
+}
+
+// Particles
+for(let i=particles.length-1;i>=0;i--){
+particles[i].x+=particles[i].vx;
+particles[i].y+=particles[i].vy;
+particles[i].life--;
+if(particles[i].life<=0)particles.splice(i,1);
+}
+
+// Shield erosion from alien presence (slow)
+if(frameCount%120===0){
+for(const shield of shields){
+for(const sp of shield){
+if(!sp.alive)continue;
+for(const a of aliens){
+if(!a.alive)continue;
+if(Math.abs(sp.x-a.x)<8&&Math.abs(sp.y-a.y)<8){
+if(Math.random()<0.1)sp.alive=false;
+}
+}
+}
+}
+}
+}
+
+function spawnParticles(x,y,color,count){
+for(let i=0;i<count;i++){
+particles.push({
+x,y,color,
+vx:(Math.random()-0.5)*3,
+vy:(Math.random()-0.5)*3,
+life:20+Math.random()*15
+});
+}
+}
+
+function render(){
+ctx.fillStyle='#000';
+ctx.fillRect(0,0,GW,GH);
+
+if(state==='title'){
+ctx.fillStyle='#fff';
+ctx.font='8px monospace';
+ctx.textAlign='center';
+ctx.fillText('SPACE INVADERS',GW/2,80);
+ctx.fillText('',GW/2,100);
+ctx.fillText('PRESS SPACE TO START',GW/2,140);
+ctx.fillText('',GW/2,160);
+ctx.fillText('ARROW KEYS / A,D TO MOVE',GW/2,180);
+ctx.fillText('SPACE TO SHOOT',GW/2,192);
+return;
+}
+
+if(state==='gameover'){
+ctx.fillStyle='#fff';
+ctx.font='8px monospace';
+ctx.textAlign='center';
+ctx.fillText('GAME OVER',GW/2,100);
+ctx.fillText('SCORE: '+score,GW/2,120);
+ctx.fillText('PRESS SPACE',GW/2,150);
+return;
+}
+
+// Draw shields
+ctx.fillStyle='#0f0';
+for(const shield of shields){
+for(const sp of shield){
+if(sp.alive)ctx.fillRect(sp.x,sp.y,1,1);
+}
+}
+
+// Draw aliens
+const alienColors=['#fff','#fff','#fff'];
+for(const a of aliens){
+if(!a.alive)continue;
+const spriteKey=a.type===0?(a.frame?'invader1b':'invader1'):
+a.type===1?(a.frame?'invader2b':'invader2'):
+(a.frame?'invader3b':'invader3');
+drawSprite(spriteKey,a.x-4,a.y-4,'#fff',1);
+}
+
+// Draw player
+drawSprite('player',playerX-4,playerY-4,'#0f0',1);
+
+// Draw player shot
+if(playerShot){
+ctx.fillStyle='#fff';
+ctx.fillRect(playerShot.x-1,playerShot.y,2,4);
+}
+
+// Draw alien shots
+for(const s of alienShots){
+ctx.fillStyle='#fff';
+ctx.fillRect(s.x-1,s.y,2,4);
+}
+
+// Draw UFO
+if(ufo){
+drawSprite('ufo',ufo.x-6,ufo.y-4,'#f00',1);
+}
+
+// Draw particles
+for(const p of particles){
+ctx.fillStyle=p.color;
+ctx.fillRect(p.x,p.y,1,1);
+}
+
+// HUD
+ctx.fillStyle='#fff';
+ctx.font='8px monospace';
+ctx.textAlign='left';
+ctx.fillText('SCORE:'+String(score).padStart(6,'0'),4,12);
+ctx.textAlign='right';
+ctx.fillText('WAVE:'+wave,GW-4,12);
+
+// Lives
+ctx.textAlign='left';
+for(let i=0;i<lives;i++){
+ctx.fillStyle='#0f0';
+ctx.fillRect(4+i*10,20,6,6);
+}
+
+// Bottom line
+ctx.fillStyle='#fff';
+ctx.fillRect(0,240,GW,1);
+}
+
+let lastTime=0;
+let accumulator=0;
+const TICK=1000/60;
+
+function gameLoop(timestamp){
+if(!lastTime)lastTime=timestamp;
+let dt=timestamp-lastTime;
+lastTime=timestamp;
+if(dt>100)dt=100;
+accumulator+=dt;
+while(accumulator>=TICK){
+update();
+accumulator-=TICK;
+}
+render();
+requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+})();
+</script>
+</body>
+</html>

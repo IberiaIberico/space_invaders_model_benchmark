@@ -1,0 +1,343 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Space Invaders</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: monospace; color: #fff; user-select: none; }
+canvas { image-rendering: pixelated; max-width: 95vw; max-height: 95vh; border: 2px solid #333; background: #000; }
+#start { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; cursor: pointer; padding: 20px; border: 2px solid #fff; background: rgba(0,0,0,0.8); }
+#start:hover { background: rgba(30,30,30,0.9); }
+</style>
+</head>
+<body>
+<div id="start">CLICK TO START</div>
+<canvas id="game"></canvas>
+<script>
+const C = document.getElementById('game'), S = document.getElementById('start');
+const LW = 384, LH = 512;
+C.width = LW; C.height = LH;
+
+// Audio Context & Sound Generation
+let AC, masterGain, osc;
+function initAudio() {
+    if (AC) return;
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = AC.createGain();
+    masterGain.gain.value = 0.15;
+    masterGain.connect(AC.destination);
+}
+
+function playSound(type, duration = 0.2) {
+    if (!AC) return;
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.connect(g).connect(masterGain);
+    g.gain.setValueAtTime(0.15, AC.currentTime);
+    
+    switch(type) {
+        case 'shoot': o.type = 'square'; o.frequency.value = 880; break;
+        case 'alienShot': o.type = 'sawtooth'; o.frequency.value = 220; break;
+        case 'explosion': o.type = 'noise' === 'noise' ? undefined : 'sawtooth'; // Fallback to sawtooth for simplicity
+            if(o.type !== 'square') { o.type = 'sawtooth'; o.frequency.value = 150; } break;
+        case 'ufo': o.type = 'triangle'; o.frequency.value = 440; break;
+    }
+    
+    g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + duration);
+    o.start(); o.stop(AC.currentTime + duration);
+}
+
+// Sprite Patterns (compact binary strings)
+const PAT = {
+    p: "010\n111\n111\n101",
+    a0: "101\n111\n111\n111",
+    a1: "010\n111\n111\n111",
+    a2: "101\n111\n111\n111",
+    a3: "010\n111\n111\n111",
+    a4: "010\n111\n111\n111",
+    ufo: "01110\n11111\n11111\n01110"
+};
+
+function parsePattern(str) {
+    return str.split('\n').map(r => r.split('').map(c => c === '1'));
+}
+
+// Game State
+let state = {
+    score: 0, lives: 3, wave: 1, running: false, gameOver: false,
+    aliens: [], bullets: [], shields: [], ufo: null,
+    playerX: LW/2 - 8, playerY: LH - 40,
+    shootCooldown: 0, alienShootTimer: 0,
+    speedBase: 1.5, speedMult: 1,
+    lastTime: 0, ufoTimer: 0, ufoActive: false
+};
+
+// Initialize Shields (4 rows of blocks)
+function initShields() {
+    state.shields = [];
+    for (let i = 0; i < 4; i++) {
+        let x = 60 + i * 90;
+        let y = LH - 120;
+        // Create shield blocks with health
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 5; c++) {
+                state.shields.push({ x: x + c*6, y: y + r*6, w: 6, h: 6, health: 3 });
+            }
+        }
+    }
+}
+
+// Initialize Aliens (5 rows)
+function initAliens() {
+    state.aliens = [];
+    const rows = 5;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < 11; c++) {
+            state.aliens.push({ x: 40 + c * 32, y: 60 + r * 32, type: r, alive: true });
+        }
+    }
+}
+
+// Spawn UFO
+function spawnUFO() {
+    if (state.ufoActive) return;
+    state.ufo = { x: -40, y: 30, w: 32, h: 16, dir: Math.random() > 0.5 ? 1 : -1 };
+    state.ufoTimer = 8; // seconds to disappear
+    state.ufoActive = true;
+    playSound('ufo', 0.4);
+}
+
+// Input Handling
+const keys = {};
+window.addEventListener('keydown', e => {
+    if (['ArrowLeft','ArrowRight','a','d'].includes(e.key.toLowerCase())) keys[e.key] = true;
+    if (e.key === ' ') {
+        e.preventDefault();
+        if (!state.shootCooldown && state.running) shootPlayer();
+    }
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+
+function shootPlayer() {
+    if (state.bullets.length >= 1) return; // Only one shot allowed
+    state.bullets.push({ x: state.playerX + 8, y: state.playerY - 4, type: 'player', life: 0.6 });
+    playSound('shoot');
+    state.shootCooldown = 0.3;
+}
+
+function shootAlien(bx, by) {
+    if (state.bullets.length >= 1) return; // Only one alien shot allowed
+    state.bullets.push({ x: bx + 8, y: by + 4, type: 'alien', life: 0.5 });
+    playSound('alienShot');
+}
+
+// Collision Detection (AABB with tolerance)
+function collides(a, b) {
+    return a.x < b.x + b.w - 2 && a.x + a.w > b.x + 2 && a.y < b.y + b.h - 2 && a.y + a.h > b.y + 2;
+}
+
+// Update Logic
+function update(dt) {
+    if (!state.running || state.gameOver) return;
+    
+    // Player Movement
+    const spd = 180 * dt;
+    if (keys['ArrowLeft'] || keys['a']) state.playerX -= spd;
+    if (keys['ArrowRight'] || keys['d']) state.playerX += spd;
+    state.playerX = Math.max(4, Math.min(LW - 20, state.playerX));
+    
+    // Shoot Cooldown
+    if (state.shootCooldown > 0) state.shootCooldown -= dt;
+    
+    // Alien Movement & Formation Logic
+    let minX = Infinity, maxX = -Infinity;
+    let aliveCount = 0;
+    for (let a of state.aliens) {
+        if (!a.alive) continue;
+        aliveCount++;
+        minX = Math.min(minX, a.x);
+        maxX = Math.max(maxX, a.x + 24);
+    }
+    
+    // Speed increases as aliens are destroyed
+    let speed = state.speedBase * (1 + (55 - aliveCount) * 0.08);
+    if (aliveCount === 0 && !state.gameOver) {
+        // New wave
+        state.wave++;
+        initAliens();
+        return;
+    }
+    
+    // Move formation
+    let dir = state.dir || 1;
+    for (let a of state.aliens) {
+        if (!a.alive) continue;
+        a.x += speed * dir;
+    }
+    
+    // Check edge & descend
+    if ((dir === 1 && maxX + speed > LW - 4) || (dir === -1 && minX - speed < 4)) {
+        state.dir = -dir;
+        for (let a of state.aliens) a.y += 8;
+    } else {
+        // Keep direction consistent if not at edge
+        if (!state.dir) state.dir = dir;
+    }
+    
+    // Alien Shooting (rhythmic, based on wave)
+    state.alienShootTimer -= dt;
+    if (state.alienShootTimer <= 0 && aliveCount > 0) {
+        let shooter = null;
+        for (let a of state.aliens) {
+            if (!a.alive || a.y < 60 + 4 * 32) continue; // Only bottom rows shoot
+            if (!shooter || Math.random() > 0.5) shooter = a;
+        }
+        if (shooter) {
+            shootAlien(shooter.x, shooter.y);
+            state.alienShootTimer = 1.5 - state.wave * 0.1; // Faster shots on higher waves
+        }
+    }
+    
+    // UFO Logic
+    if (state.ufoActive) {
+        state.ufoTimer -= dt;
+        state.ufo.x += (state.ufo.dir === 1 ? 2 : -2);
+        if (state.ufoTimer <= 0 || state.ufo.x < -40 || state.ufo.x > LW + 40) {
+            state.ufo = null; state.ufoActive = false;
+        }
+    } else if (Math.random() < 0.001 && aliveCount > 20) spawnUFO(); // Random spawn
+    
+    // Bullets Update & Collision
+    for (let i = state.bullets.length - 1; i >= 0; i--) {
+        let b = state.bullets[i];
+        if (b.type === 'player') {
+            b.y -= 320 * dt;
+            // Hit Aliens or UFO
+            let hit = false;
+            for (let a of state.aliens) {
+                if (!a.alive || !collides(b, { x: a.x, y: a.y, w: 24, h: 16 })) continue;
+                a.alive = false; hit = true; break;
+            }
+            if (state.ufo && collides(b, state.ufo)) { hit = true; state.ufoActive = false; state.score += 100; playSound('explosion'); }
+            // Hit Shields
+            for (let s of state.shields) {
+                if (!hit && collides(b, s)) { s.health--; hit = true; break; }
+            }
+        } else { // Alien bullet
+            b.y += 200 * dt;
+            // Hit Player or Shields
+            let hitPlayer = false;
+            for (let s of state.shields) {
+                if (!hitPlayer && collides(b, s)) { s.health--; hitPlayer = true; break; }
+            }
+            if (!hitPlayer && collides(b, { x: state.playerX, y: state.playerY - 4, w: 16, h: 8 })) {
+                hitPlayer = true; playSound('explosion');
+            }
+        }
+        
+        // Remove bullet if off screen or life expired
+        if (b.y < -20 || b.y > LH + 20 || b.life <= 0) state.bullets.splice(i, 1);
+    }
+    
+    // Check Game Over Conditions
+    for (let a of state.aliens) {
+        if (a.alive && a.y + 16 >= state.playerY - 4) {
+            state.gameOver = true; return;
+        }
+    }
+}
+
+// Render Logic
+function render() {
+    C.getContext('2d').clearRect(0, 0, LW, LH);
+    
+    // Draw Player
+    drawSprite(PAT.p, state.playerX + 4, state.playerY - 8, 16, 16);
+    
+    // Draw Aliens
+    for (let a of state.aliens) {
+        if (!a.alive) continue;
+        let pat = PAT['a' + a.type];
+        drawSprite(pat, a.x, a.y, 24, 16);
+    }
+    
+    // Draw UFO
+    if (state.ufoActive && state.ufo) {
+        drawSprite(PAT.ufo, state.ufo.x, state.ufo.y, 32, 16);
+    }
+    
+    // Draw Shields
+    for (let s of state.shields) {
+        if (s.health <= 0) continue;
+        let alpha = Math.min(1, s.health / 3);
+        C.fillStyle = `rgba(100,255,100,${alpha})`;
+        C.fillRect(s.x, s.y, s.w, s.h);
+    }
+    
+    // Draw Bullets
+    for (let b of state.bullets) {
+        if (b.type === 'player') {
+            C.fillStyle = '#fff';
+            C.fillRect(b.x - 1, b.y, 2, 8);
+        } else {
+            C.fillStyle = '#ff4444';
+            C.fillRect(b.x - 1, b.y, 2, 6);
+        }
+    }
+    
+    // UI Text
+    C.fillStyle = '#fff';
+    C.font = '16px monospace';
+    C.fillText(`SCORE: ${state.score}`, 10, 30);
+    C.fillText(`LIVES: ${state.lives}`, LW - 80, 30);
+    C.fillText(`WAVE: ${state.wave}`, LW/2 - 40, LH - 10);
+    
+    // Game Over Overlay
+    if (state.gameOver) {
+        C.fillStyle = 'rgba(0,0,0,0.85)';
+        C.fillRect(0, 0, LW, LH);
+        C.fillStyle = '#fff';
+        C.font = '24px monospace';
+        C.fillText('GAME OVER', LW/2 - 60, LH/2 - 20);
+    }
+}
+
+function drawSprite(pattern, x, y, w, h) {
+    const rows = pattern.length;
+    const cols = pattern[0].length;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (pattern[r][c]) C.fillRect(x + c * (w/cols), y + r * (h/rows), w/cols, h/rows);
+        }
+    }
+}
+
+// Main Loop & Init
+let lastTime = 0;
+function loop(time) {
+    if (!state.running) return requestAnimationFrame(loop);
+    let dt = Math.min(0.1, (time - lastTime) / 1000);
+    lastTime = time;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+}
+
+// Start Game on Click
+S.addEventListener('click', () => {
+    initAudio();
+    state.running = true;
+    S.style.display = 'none';
+    initAliens();
+    initShields();
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+});
+
+// Prevent accidental reload on space/arrow keys
+window.addEventListener('keydown', e => { if(['ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault(); });
+</script>
+</body>
+</html>
+```

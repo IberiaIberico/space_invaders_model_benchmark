@@ -1,0 +1,20 @@
+{
+  "model": "mistralai/ministral-3-14b-reasoning",
+  "timestamp": "2026-10-23T19:17:40",
+  "elapsed_seconds": 115.9,
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 555,
+    "completion_tokens": 4192,
+    "total_tokens": 4747,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "tokens_per_second": 36.2,
+  "temperature": 0.2,
+  "max_tokens": 32000,
+  "html_extracted": true,
+  "system": "You are an expert web game developer. Reply with a single, complete, self-contained HTML file (inline CSS and JavaScript, no external assets). Output only the HTML inside one ```html code block.",
+  "prompt": "Create a complete Space Invaders-style arcade game using only HTML5, CSS and vanilla JavaScript. Goal:Reproduce the gameplay, visual style and feel of the original 1978 Space Invaders arcade game as closely as reasonably possible. Technical requirements:- Deliver everything in a single self-contained index.html file.- No external libraries, frameworks, images, fonts or dependencies.- Use HTML5 Canvas for rendering.- The file must run directly in a modern browser.- Keep the implementation compact, clean and efficient.- Do not explain the code.- Output ONLY the complete HTML file. Gameplay:- Player cannon at the bottom, moving left/right.- Controls: Left/Right arrows or A/D. Space to shoot.- Player can have only one shot on screen at a time, like the original.- Formation of alien invaders arranged in rows.- Different alien types/appearances by row.- Aliens move horizontally as a group, reverse direction and descend when reaching an edge.- Alien movement progressively speeds up as aliens are destroyed.- Aliens fire downward at the player.- Implement the characteristic accelerating rhythm/pacing of Space Invaders.- Four destructible defensive shields/bunkers between player and invaders.- Both player shots and alien shots must progressively damage the shields.- UFO/mystery ship occasionally crosses the top of the screen.- Score system.- Lives system.- Wave progression: after destroying all aliens, start a new wave.- Game over when the player loses all lives or invaders reach the bottom. Visual style:- Faithful 1978 arcade aesthetic.- Black background.- Pixel-art appearance.- Aliens, player, UFO, shields and projectiles should resemble the classic silhouettes, but draw them programmatically rather than using external assets.- Crisp pixels, no antialiasing/blurring.- Retro arcade score/lives display.- Fixed logical game resolution scaled to fit the browser while preserving aspect ratio. Sound:- Generate simple retro sounds with the Web Audio API.- Alien movement rhythm.- Player shot.- Alien destroyed.- Player explosion.- UFO sound. Architecture:- Use requestAnimationFrame for the main loop.- Separate update/render logic.- Use delta time where appropriate.- Avoid unnecessary abstractions and comments.- Prioritize gameplay fidelity over visual effects. Important:Before writing the code, internally plan the implementation, but do not output the plan.Return ONLY the final contents of index.html inside one code block.Do not include explanations before or after it. I want you to test and save as spaceinvaders.html in the project folder."
+}

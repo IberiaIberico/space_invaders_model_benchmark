@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Space Invaders</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+body{display:flex;align-items:center;justify-content:center}
+canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+</style>
+</head>
+<body>
+<canvas id="c" width="224" height="256"></canvas>
+<script>
+const W=224,H=256,cv=document.getElementById('c'),ctx=cv.getContext('2d');
+ctx.imageSmoothingEnabled=false;
+function fit(){const m=Math.min(innerWidth/W,innerHeight/H),s=m>=1?Math.floor(m):m;cv.style.width=W*s+'px';cv.style.height=H*s+'px'}
+addEventListener('resize',fit);fit();
+
+function spr(r){const w=Math.max(...r.map(s=>s.length)),c=document.createElement('canvas');c.width=w;c.height=r.length;const x=c.getContext('2d');x.fillStyle='#fff';r.forEach((s,j)=>{for(let i=0;i<s.length;i++)if(s[i]=='#')x.fillRect(i,j,1,1)});return c}
+const S=s=>spr(s.split(' '));
+const A=[
+[S('...##... ..####.. .######. ##.##.## ######## ..#..#.. .#.##.#. #.#..#.#'),S('...##... ..####.. .######. ##.##.## ######## .#.##.#. #......# .#....#.')],
+[S('..#.....#.. ...#...#... ..#######.. .##.###.##. ########### #.#######.# #.#.....#.# ...##.##...'),S('..#.....#.. #..#...#..# #.#######.# ###.###.### ########### .#########. ..#.....#.. .#.......#.')],
+[S('....####.... .##########. ############ ###..##..### ############ ...##..##... ..##.##.##.. ##........##'),S('....####.... .##########. ############ ###..##..### ############ ..###..###.. .##..##..##. ..##....##..')]];
+const AW=[8,11,12],AO=[2,0,0],PTS=[30,20,10];
+const PL=S('......#...... .....###..... .....###..... .###########. ############# ############# ############# #############');
+const PX=[S('......#......... ..#.......#..... ....#..#..#.#... ...#.##.#....... .#..########.#.. ...##########... ..############.. .##############.'),S('#.......#.....#. ....#.....#..... .#....#.#....#.. .....#.##.#..... ..#.#######.#... #..##########..# ..############.. .##############.')];
+const UFO=S('.....######..... ...##########... ..############.. .##.##.##.##.##. ################ ..###..##..###.. ...#........#...');
+const UEX=S('#..#....#..#....#... ..#..#.#..#..#.#.... ...#.########.#..... ..#############.#... #.##############.... ...#.##.##.##.#..#.. .#..#..#...#..#..... #...#.....#....#..#.');
+const AEX=S('....#...#.... .#...#.#...#. ..#.......#.. ...#.....#... ##.........## ...#.....#... ..#..#.#..#.. .#..#...#..#.');
+const PXM='#...#..# ..#...#. .######. ######## ######## .######. ..#..#.. #..#...#'.split(' '),PXS=spr(PXM);
+const AXM='..#... #...#. ..##.# .####. #.###. .####. #.#.#. ..#..#'.split(' '),AXS=spr(AXM);
+const SH=[[],[],[]];
+for(let k=0;k<4;k++){const a=[],b=[],c=[];for(let r=0;r<7;r++){const m=(r+2*k)%6;a.push(m==0?'##.':m==3?'.##':'.#.');b.push(r==2*k?'###':'.#.');const s=['.','.','.'];s[[0,1,2,1][(r+k)%4]]='#';c.push(s.join(''))}SH[0].push(spr(a));SH[1].push(spr(b));SH[2].push(spr(c))}
+const FC=' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789=?*-<>.!',GL={};
+'0000000 ehhvhhh uhhuhhu ehggghe uhhhhhu vgguggv vgguggg ehgnhhf hhhvhhh e44444e 11111he hikokih ggggggv hrllhhh hhpljhh ehhhhhe uhhuggg ehhhlid uhhukih fgge11u v444444 hhhhhhe hhhhha4 hhhllla hha4ahh hha4444 v1248gv ehjlphe 4c4444e eh1248v v2421he 26aiv22 vgu11he 68guhhe v124888 ehhehhe ehhf12c 00v0v00 eh12404 04lel40 000v000 248g842 8421248 0000004 4444404'.split(' ').forEach((d,i)=>GL[FC[i]]=spr([...d].map(v=>{const n=parseInt(v,32);let s='';for(let b=4;b>=0;b--)s+=n>>b&1?'#':'.';return s})));
+function txt(s,x,y){for(const ch of String(s)){const g=GL[ch];if(g)ctx.drawImage(g,x+1,y);x+=8}}
+const pad=n=>String(n%10000).padStart(4,'0');
+
+const SY=192,sg=new Uint8Array(W*16),sc=document.createElement('canvas');sc.width=W;sc.height=16;
+const scx=sc.getContext('2d'),sid=scx.createImageData(W,16);let sdirty=true;
+function buildShields(){sg.fill(0);for(let k=0;k<4;k++){const ox=32+k*45;for(let y=0;y<16;y++)for(let x=0;x<22;x++){let on=!(y<4&&(x<4-y||x>17+y));if(y>=12){const a=y==12?8:y==13?7:6;if(x>=a&&x<=21-a)on=false}if(on)sg[y*W+ox+x]=1}}sdirty=true}
+const sHit=(x,y)=>(y-=SY,x>=0&&x<W&&y>=0&&y<16&&sg[y*W+x]);
+function sErase(x,y,m,w,h){for(let j=0;j<h;j++)for(let i=0;i<w;i++)if(!m||m[j][i]=='#'){const X=x+i,Y=y+j-SY;if(X>=0&&X<W&&Y>=0&&Y<16)sg[Y*W+X]=0}sdirty=true}
+function drawShields(){if(sdirty){const d=sid.data;for(let i=0;i<sg.length;i++){const v=sg[i]*255;d[i*4]=d[i*4+1]=d[i*4+2]=d[i*4+3]=v}scx.putImageData(sid,0,0);sdirty=false}ctx.drawImage(sc,0,SY)}
+
+let ac,nb,ufoOsc=null;
+function initAudio(){if(!ac){try{ac=new(window.AudioContext||window.webkitAudioContext)();const n=ac.sampleRate;nb=ac.createBuffer(1,n,n);const d=nb.getChannelData(0);for(let i=0;i<n;i++)d[i]=Math.random()*2-1}catch(e){ac=null}}if(ac&&ac.state=='suspended')ac.resume()}
+function tone(type,f0,f1,dur,vol,d=0){if(!ac)return;const t=ac.currentTime+d,o=ac.createOscillator(),g=ac.createGain();o.type=type;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+dur);g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);o.connect(g).connect(ac.destination);o.start(t);o.stop(t+dur)}
+function noise(dur,vol,f){if(!ac)return;const t=ac.currentTime,s=ac.createBufferSource(),fl=ac.createBiquadFilter(),g=ac.createGain();s.buffer=nb;s.loop=true;fl.type='lowpass';fl.frequency.setValueAtTime(f,t);fl.frequency.exponentialRampToValueAtTime(80,t+dur);g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);s.connect(fl).connect(g).connect(ac.destination);s.start(t);s.stop(t+dur)}
+const MN=[62,55,49,46];
+const sfx={
+shoot(){tone('sawtooth',1100,140,.16,.06)},
+kill(){noise(.22,.3,3000);tone('square',520,60,.18,.05)},
+die(){noise(1.2,.45,1800);tone('sawtooth',180,35,1,.07)},
+march(i){tone('square',MN[i],MN[i]*.85,.11,.16)},
+ufoHit(){for(let i=0;i<8;i++)tone('square',1100-i*70,300,.09,.05,i*.1)},
+extra(){for(let i=0;i<6;i++)tone('square',1300,1250,.06,.05,i*.12)}};
+function ufoStart(){if(!ac||ufoOsc)return;const o=ac.createOscillator(),l=ac.createOscillator(),lg=ac.createGain(),g=ac.createGain();o.type='square';o.frequency.value=620;l.frequency.value=7;lg.gain.value=220;l.connect(lg).connect(o.frequency);g.gain.value=.035;o.connect(g).connect(ac.destination);o.start();l.start();ufoOsc=[o,l]}
+function ufoStop(){if(ufoOsc){ufoOsc.forEach(o=>o.stop());ufoOsc=null}}
+
+const MT=[[50,52],[43,46],[36,39],[28,34],[22,28],[17,24],[13,21],[10,19],[8,16],[7,14],[6,13],[5,12],[4,11],[3,9],[2,7],[1,5]];
+const PC=[1,7,1,1,1,4,11,1,6,3,1,1,11,9,2,8],QC=[11,1,6,3,1,1,11,9,2,8,2,11,4,7,10],UP=[100,50,50,100,150,100,100,50,300,100,100,100,50,150,100];
+let state='title',score=0,hi=0,lives=3,wave,aliens=[],dir,cursor,descend,landed,marchI,marchT,player,pshot,pBlock,ashots,fx=[],ufo,ufoT,shots,frame=0,hold,pause,deadT,overT,waveT,extra,aT,aType,cp,ground=new Uint8Array(W).fill(1),paused=false,fireQ=false;
+const keys={};
+try{hi=+localStorage.getItem('si_hi')||0}catch(e){}
+addEventListener('keydown',e=>{const k=e.code;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(k))e.preventDefault();initAudio();if(!e.repeat&&(k=='Space'||k=='Enter'))fireQ=true;if(k=='KeyP'&&!e.repeat&&state=='play')paused=!paused;keys[k]=true});
+addEventListener('keyup',e=>keys[e.code]=false);
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false});
+
+function newGame(){score=0;lives=3;wave=0;extra=false;shots=0;ground.fill(1);state='play';paused=false;startWave()}
+function startWave(){const by=64+[0,16,24,32,32,32,40,40,40][wave%9];aliens=[];for(let r=0;r<5;r++)for(let c=0;c<11;c++)aliens.push({x:24+c*16,y:by+(4-r)*16,t:r>3?0:r>1?1:2,f:0,c,on:1});
+dir=2;cursor=0;descend=false;landed=false;marchI=0;marchT=0;player={x:16,on:1};pshot=null;pBlock=0;ashots=[];fx=[];ufo=null;ufoStop();ufoT=1536;hold=60;pause=0;deadT=0;waveT=0;aT=0;aType=0;cp=[0,0];buildShields()}
+function addScore(p){score+=p;if(!extra&&score>=1500){extra=true;lives++;sfx.extra()}if(score>hi)hi=score}
+function gameOver(){state='over';overT=240;ufoStop();try{localStorage.setItem('si_hi',hi)}catch(e){}}
+function killPlayer(){player.on=0;deadT=110;pshot=null;sfx.die()}
+
+function wrap(){cursor=0;if(descend){descend=false;dir=-dir}else for(const a of aliens)if(a.on){const ax=a.x+AO[a.t];if(dir>0?ax+AW[a.t]>=W-8:ax<=8){descend=true;break}}}
+function march(){let g=0;while(!aliens[cursor].on){if(++cursor>=55)wrap();if(++g>56)return}
+const a=aliens[cursor];if(descend)a.y+=8;else a.x+=dir;a.f^=1;
+if(a.y+8>SY&&a.y<SY+16)sErase(a.x+AO[a.t],a.y,null,AW[a.t],8);
+if(a.y+8>=216&&player.on){landed=true;killPlayer()}
+if(++cursor>=55)wrap()}
+
+function alienFire(n){if(++aT<(score<200?48:score<1000?16:score<2000?11:score<3000?8:7))return;
+for(let k=0;k<3;k++){const t=(aType+k)%3;if(ashots.some(s=>s.t==t)||(t==1&&n==1))continue;let col=-1;
+if(t==0){let bd=1e9;for(const a of aliens)if(a.on){const d=Math.abs(a.x-player.x);if(d<bd){bd=d;col=a.c}}}
+else{const tb=t==1?PC:QC;col=tb[cp[t-1]++%tb.length]-1}
+let lo=null;for(const a of aliens)if(a.on&&a.c==col&&(!lo||a.y>lo.y))lo=a;
+if(!lo)continue;ashots.push({x:lo.x+AO[lo.t]+(AW[lo.t]>>1)-1,y:lo.y+8,fy:lo.y+8,t});aType=(t+1)%3;aT=0;return}}
+
+function pStep(){const x=pshot.x,y=pshot.y;
+if(y<=32){fx.push({x:x-3,y:32,s:PXS,t:16});pshot=null;return}
+if(ufo&&!ufo.dead&&x>=ufo.x&&x<ufo.x+16&&y>=40&&y<47){const p=UP[shots%15];addScore(p);ufo.dead=1;ufo.t=90;ufo.p=p;ufoStop();sfx.ufoHit();pshot=null;return}
+for(const a of aliens)if(a.on){const ax=a.x+AO[a.t];if(x>=ax&&x<ax+AW[a.t]&&y>=a.y&&y<a.y+8){a.on=0;addScore(PTS[a.t]);fx.push({x:a.x,y:a.y,s:AEX,t:16});pause=16;pBlock=16;sfx.kill();pshot=null;return}}
+if(sHit(x,y)){sErase(x-3,y-4,PXM,8,8);fx.push({x:x-3,y:y-4,s:PXS,t:12});pshot=null;return}
+for(let i=0;i<ashots.length;i++){const s=ashots[i];if(x>=s.x&&x<s.x+3&&y>=s.y&&y<s.y+7){ashots.splice(i,1);fx.push({x:x-3,y:y-4,s:PXS,t:12});pshot=null;return}}}
+
+function aStep(s){const b=s.y+6;
+if(b>=239){fx.push({x:s.x-1,y:232,s:AXS,t:16});for(let i=0;i<6;i++)if(AXM[7][i]=='#'||AXM[6][i]=='#')ground[s.x-1+i]=0;return true}
+for(let i=0;i<3;i++)if(sHit(s.x+i,b)){sErase(s.x-1,b-2,AXM,6,8);fx.push({x:s.x-1,y:b-2,s:AXS,t:16});return true}
+if(player.on&&b>=216&&b<224&&s.x+2>=player.x&&s.x<=player.x+12){killPlayer();return true}
+return false}
+
+function update(){frame++;const fire=fireQ;fireQ=false;
+if(state=='title'){if(fire)newGame();return}
+if(paused)return;
+fx=fx.filter(e=>--e.t>0);
+if(state=='over'){if(--overT<=0)state='title';else if(fire&&overT<180)newGame();return}
+const n=aliens.reduce((c,a)=>c+a.on,0);
+if(pBlock)pBlock--;
+if(player.on){
+if(keys.ArrowLeft||keys.KeyA)player.x=Math.max(8,player.x-1);
+if(keys.ArrowRight||keys.KeyD)player.x=Math.min(W-21,player.x+1);
+if(fire&&!pshot&&!pBlock&&!waveT){pshot={x:player.x+6,y:212};shots++;sfx.shoot()}
+}else if(--deadT<=0){if(landed||--lives<=0){gameOver();return}player={x:16,on:1};ashots=[];hold=60}
+for(let i=0;i<4&&pshot;i++){pshot.y--;pStep()}
+if(player.on&&n){if(hold)hold--;else{if(pause)pause--;else{march();if(++marchT>=MT.find(m=>n>=m[0])[1]){marchT=0;sfx.march(marchI);marchI=(marchI+1)&3}}alienFire(n)}}
+const sp=n<=8?5/3:4/3;
+ashots=ashots.filter(s=>{s.fy+=sp;while(s.y<(s.fy|0)){s.y++;if(aStep(s))return false}return true});
+if(ufo){if(ufo.dead){if(--ufo.t<=0)ufo=null}else{ufo.x+=ufo.dx;if(ufo.x<0||ufo.x>W-16){ufo=null;ufoStop()}}}
+else if(player.on&&n&&!hold&&--ufoT<=0){ufoT=1536;if(n>=8){const r=shots&1;ufo={x:r?W-16:0,dx:r?-1:1};ufoStart()}}
+if(!n&&!waveT&&player.on&&!pshot)waveT=120;
+if(waveT&&--waveT==0){wave++;startWave()}}
+
+function render(){ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+txt(' SCORE<1> HI-SCORE SCORE<2>',0,8);txt(pad(score),24,24);txt(pad(hi),96,24);
+if(state=='title'){const f=frame>>5&1;
+txt('PLAY',96,56);txt('SPACE INVADERS',56,80);txt('*SCORE ADVANCE TABLE*',28,112);
+ctx.drawImage(UFO,60,136);txt('=? MYSTERY',80,136);
+ctx.drawImage(A[0][f],64,152);txt('=30 POINTS',80,152);
+ctx.drawImage(A[1][f],62,168);txt('=20 POINTS',80,168);
+ctx.drawImage(A[2][f],62,184);txt('=10 POINTS',80,184);
+if(f)txt('PUSH SPACE TO START',36,212);
+}else{
+if(ufo){if(!ufo.dead)ctx.drawImage(UFO,ufo.x,40);else if(ufo.t>66)ctx.drawImage(UEX,ufo.x-2,40);else txt(ufo.p,ufo.x+7-String(ufo.p).length*4,40)}
+for(const a of aliens)if(a.on)ctx.drawImage(A[a.t][a.f],a.x+AO[a.t],a.y);
+drawShields();
+if(player.on)ctx.drawImage(PL,player.x,216);else if(deadT>30)ctx.drawImage(PX[frame>>2&1],player.x-1,216);
+ctx.fillStyle='#fff';if(pshot)ctx.fillRect(pshot.x,pshot.y,1,4);
+for(const s of ashots)ctx.drawImage(SH[s.t][(frame/3|0)&3],s.x,s.y);
+for(const e of fx)ctx.drawImage(e.s,e.x,e.y);
+if(state=='over')txt('GAME OVER',76,56);
+if(paused)txt('PAUSED',88,56);
+txt(lives,8,241);for(let i=0;i<Math.min(lives-1,6);i++)ctx.drawImage(PL,24+i*16,241)}
+ctx.fillStyle='#fff';for(let x=0;x<W;x++)if(ground[x])ctx.fillRect(x,239,1,1);
+txt('CREDIT 00',136,241);
+ctx.globalCompositeOperation='multiply';ctx.fillStyle='#ff2020';ctx.fillRect(0,32,W,16);ctx.fillStyle='#20ff20';ctx.fillRect(0,184,W,56);ctx.fillRect(24,240,112,16);ctx.globalCompositeOperation='source-over'}
+
+let last=performance.now(),acc=0;const STEP=1000/60;
+function loop(t){acc+=Math.max(0,Math.min(t-last,250));last=t;while(acc>=STEP){update();acc-=STEP}render();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
